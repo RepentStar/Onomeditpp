@@ -236,7 +236,7 @@ Register-ArgumentCompleter -CommandName onomedit, onomedit.exe -ScriptBlock {
     $valueMap = @{
         '--path-type' = @(
             @{ name='full'; tip='完整路径' },
-            @{ name='name'; tip='仅文件名' },
+            @{ name='name'; tip='完整文件名' },
             @{ name='stem'; tip='不含扩展名' },
             @{ name='ext'; tip='仅扩展名' }
         )
@@ -335,7 +335,7 @@ pub fn generate(shell: &str) -> Option<String> {
         ("恢复重命名", "Restore renames"),
         ("版本信息", "Version information"),
         ("完整路径", "Full path"),
-        ("仅文件名", "File name only"),
+        ("完整文件名", "File name only"),
         ("不含扩展名", "Without extension"),
         ("仅扩展名", "Extension only"),
         ("生成", "Generate"),
