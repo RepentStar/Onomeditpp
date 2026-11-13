@@ -127,6 +127,12 @@ struct RenameArgs {
     sort_by: Option<String>,
     #[arg(long, help = "临时反转重命名顺序")]
     reverse: bool,
+    #[arg(
+        short,
+        long,
+        help = "递归匹配通配符：搜索模式所在目录及所有子目录（不受 --depth 限制）"
+    )]
+    recursive: bool,
     #[arg(long, help = "临时目录搜索深度；指定时开启子文件夹展开")]
     depth: Option<i32>,
     #[arg(
@@ -220,7 +226,7 @@ const COMPLETION_USAGE: &str = "usage: onomedit completion {bash,zsh,pwsh,fish,p
 const CONFIG_USAGE: &str = "usage: onomedit config <操作> ...";
 const CONFIG_SET_USAGE: &str = "usage: onomedit config set key value";
 const CONFIG_SET_EDITOR_USAGE: &str = "usage: onomedit config set-editor command [command ...]";
-const RENAME_USAGE: &str = "usage: onomedit rename [--dry-run] [--no-editor]\n                       [--path-type {full,name,stem,ext}] [--multi-tab]\n                       [--timeout TIMEOUT] [--sort-by KEY] [--reverse]\n                       [--depth N] [--exclude TYPE [TYPE ...]]\n                       [paths ...]";
+const RENAME_USAGE: &str = "usage: onomedit rename [--dry-run] [--no-editor]\n                       [--path-type {full,name,stem,ext}] [--multi-tab]\n                       [--timeout TIMEOUT] [--sort-by KEY] [--reverse]\n                       [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]\n                       [paths ...]";
 
 fn compatible_parse_error(arguments: &[OsString]) -> Option<String> {
     let args: Vec<String> = arguments
@@ -544,7 +550,7 @@ options:
             r#"usage: onomedit rename [--dry-run] [--no-editor]
                        [--path-type {full,name,stem,ext}] [--multi-tab]
                        [--timeout TIMEOUT] [--sort-by KEY] [--reverse]
-                       [--depth N] [--exclude TYPE [TYPE ...]]
+                       [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]
                        [paths ...]
 
 把文件名列表写入临时文件并拉起编辑器；用户修改保存后读回并批量重命名。
@@ -563,6 +569,7 @@ options:
   --sort-by KEY         临时重命名顺序：default 原顺序、name 名称、path 路径、mtime 修改时间、ctime
                         创建时间、size 大小
   --reverse             临时反转重命名顺序：与 --sort-by 组合时按排序键降序，否则反转原顺序
+  -r, --recursive       递归匹配通配符：搜索模式所在目录及所有子目录（不受 --depth 限制）
   --depth N             临时目录搜索深度：1 = 直接子项，0 = 不展开；指定时临时开启子文件夹展开
   --exclude TYPE [TYPE ...]
                         临时排除路径类型（可多次/多值）：f/file 文件、d/dir 目录、l/link
@@ -572,6 +579,7 @@ options:
 示例:
   onomedit rename a.txt b.txt
   onomedit rename *.jpg --dry-run
+  onomedit rename "照片/*.jpg" -r --dry-run  递归匹配子目录
   onomedit rename --no-editor --path-type name  仅应用规则不拉起编辑器
   onomedit rename *.txt --exclude h d --dry-run  临时排除隐藏文件与目录
   dir /b *.jpg | onomedit rename  从管道读入路径（编辑模式下重命名）"#
@@ -669,7 +677,7 @@ Examples:
             r#"usage: onomedit rename [--dry-run] [--no-editor]
                        [--path-type {full,name,stem,ext}] [--multi-tab]
                        [--timeout TIMEOUT] [--sort-by KEY] [--reverse]
-                       [--depth N] [--exclude TYPE [TYPE ...]]
+                       [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]
                        [paths ...]
 
 Write names to an edit file, open it in your editor, then apply the saved names.
@@ -683,6 +691,7 @@ options:
   --timeout      Editor wait timeout in seconds
   --sort-by      Temporary rename order
   --reverse      Reverse the rename order
+  -r, --recursive  Match globs in their folder and all subfolders (independent of --depth)
   --depth        Temporary folder expansion depth
   --exclude      Temporarily exclude path types"#
         }
@@ -882,7 +891,9 @@ fn command_rename(args: RenameArgs) -> i32 {
         paths = clipboard::get_paths();
     }
     let clipboard_text = clipboard::get_text();
-    let pipeline = RenamePipeline::new(settings.clone()).with_clipboard_text(clipboard_text);
+    let pipeline = RenamePipeline::new(settings.clone())
+        .with_clipboard_text(clipboard_text)
+        .with_recursive(args.recursive);
     let outcome = (|| {
         let session = pipeline
             .prepare(&paths)
@@ -1209,6 +1220,18 @@ fn launch_gui() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recursive_flags_default_to_false_and_accept_both_spellings() {
+        for flag in [None, Some("-r"), Some("--recursive")] {
+            let mut arguments = vec!["onomedit", "rename", "*.docx"];
+            arguments.extend(flag);
+            let Command::Rename(args) = Cli::try_parse_from(arguments).unwrap().command else {
+                panic!()
+            };
+            assert_eq!(args.recursive, flag.is_some());
+        }
+    }
 
     #[test]
     fn cli_surface_parses_rename_options() {

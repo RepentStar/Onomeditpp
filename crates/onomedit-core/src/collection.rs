@@ -19,7 +19,9 @@ pub fn read_stream_paths(reader: impl BufRead) -> io::Result<Vec<String>> {
         .collect()
 }
 
-pub fn collect_paths(raw_paths: &[String]) -> Vec<PathBuf> {
+/// With `recursive`, insert `**` before the final glob segment unless already present.
+/// Explicit file and directory paths are left unchanged.
+pub fn collect_paths(raw_paths: &[String], recursive: bool) -> Vec<PathBuf> {
     let options = MatchOptions {
         case_sensitive: !cfg!(windows),
         require_literal_separator: false,
@@ -28,7 +30,19 @@ pub fn collect_paths(raw_paths: &[String]) -> Vec<PathBuf> {
     let mut output = Vec::new();
     for raw in raw_paths {
         if has_magic(raw) {
-            if let Ok(matches) = glob_with(raw, options) {
+            let pattern = if recursive
+                && !Path::new(raw)
+                    .components()
+                    .any(|part| part.as_os_str() == "**")
+            {
+                let (parent, name) = raw
+                    .rfind(std::path::is_separator)
+                    .map_or(("", raw.as_str()), |index| raw.split_at(index + 1));
+                format!("{parent}**/{name}")
+            } else {
+                raw.clone()
+            };
+            if let Ok(matches) = glob_with(&pattern, options) {
                 output.extend(matches.filter_map(Result::ok).filter(|path| path.exists()));
             }
         } else {
@@ -295,6 +309,92 @@ fn is_system(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recursive_globs_match_reports_beyond_directory_expansion_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("test_files");
+        let deep = (0..12).fold(root.clone(), |path, level| {
+            path.join(format!("level{level}"))
+        });
+        fs::create_dir_all(&deep).unwrap();
+        let expected = vec![root.join("report1.docx"), deep.join("report2.docx")];
+        for path in expected
+            .iter()
+            .chain([deep.join("other.docx"), deep.join("report3.txt")].iter())
+        {
+            fs::write(path, "content").unwrap();
+        }
+        for pattern in ["report*.docx", "**/report*.docx"] {
+            let paths = collect_paths(&[root.join(pattern).to_string_lossy().into_owned()], true);
+            assert_eq!(paths.len(), expected.len());
+            assert_eq!(
+                paths.into_iter().collect::<HashSet<_>>(),
+                HashSet::from_iter(expected.clone())
+            );
+        }
+        assert_eq!(
+            collect_paths(
+                &[root.join("report*.docx").to_string_lossy().into_owned()],
+                false
+            ),
+            vec![expected[0].clone()]
+        );
+    }
+
+    #[test]
+    fn recursive_relative_globs_support_wildcard_parents() {
+        let dir = tempfile::tempdir_in(".").unwrap();
+        let root = Path::new(dir.path().file_name().unwrap());
+        fs::create_dir_all(dir.path().join("sub/deep")).unwrap();
+        for name in [
+            "a.txt",
+            "sub/b.txt",
+            "sub/deep/c.txt",
+            "sub/deep/other.docx",
+        ] {
+            fs::write(dir.path().join(name), "content").unwrap();
+        }
+        for pattern in ["*.txt", "sub/*.txt", "s?b/[bc].txt"] {
+            let paths = collect_paths(&[root.join(pattern).to_string_lossy().into_owned()], true);
+            let names: HashSet<_> = paths
+                .iter()
+                .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            let expected = if pattern == "*.txt" {
+                HashSet::from(["a.txt".into(), "b.txt".into(), "c.txt".into()])
+            } else {
+                HashSet::from(["b.txt".into(), "c.txt".into()])
+            };
+            assert_eq!(names, expected, "{pattern}");
+        }
+    }
+
+    #[test]
+    fn recursive_collection_preserves_explicit_paths_and_ignores_missing_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        let sub = dir.path().join("sub");
+        fs::write(&file, "content").unwrap();
+        fs::create_dir(&sub).unwrap();
+        let paths = vec![file, sub];
+        let inputs: Vec<_> = paths
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(collect_paths(&inputs, true), paths);
+        assert!(
+            collect_paths(
+                &[dir
+                    .path()
+                    .join("missing*.docx")
+                    .to_string_lossy()
+                    .into_owned()],
+                true
+            )
+            .is_empty()
+        );
+    }
 
     #[test]
     fn expands_with_depth_and_deduplicates() {

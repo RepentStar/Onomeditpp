@@ -328,6 +328,57 @@ fn cli_only_entrypoints_report_gui_is_unavailable() {
 }
 
 #[test]
+fn recursive_rename_matches_reports_independently_of_depth_without_saving_config() {
+    for flag in ["-r", "--recursive"] {
+        let directory = tempfile::tempdir().unwrap();
+        let config_root = directory.path().join("config");
+        let root = directory.path().join("test_files");
+        let sub = root.join("subdir").join("nested");
+        fs::create_dir_all(&sub).unwrap();
+        let reports = [root.join("report1.docx"), sub.join("report2.docx")];
+        let other = sub.join("other.docx");
+        for path in reports.iter().chain([&other]) {
+            fs::write(path, "original").unwrap();
+        }
+        assert!(
+            run(&["config", "set", "editor", "nvim"], &config_root, None)
+                .status
+                .success()
+        );
+        let config_path = config_root.join("Onomedit/config.json");
+        let config_before = fs::read(&config_path).unwrap();
+        let pattern = root.join("report*.docx").to_string_lossy().into_owned();
+        let output = run(
+            &[
+                "rename",
+                &pattern,
+                flag,
+                "--no-editor",
+                "--dry-run",
+                "--depth",
+                "0",
+            ],
+            &config_root,
+            None,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        for report in &reports {
+            assert!(stdout.contains(report.to_str().unwrap()), "{stdout}");
+        }
+        assert!(!stdout.contains(other.to_str().unwrap()));
+        for path in reports.iter().chain([&other]) {
+            assert_eq!(fs::read_to_string(path).unwrap(), "original");
+        }
+        assert_eq!(fs::read(&config_path).unwrap(), config_before);
+    }
+}
+
+#[test]
 fn rust_cli_rename_history_restore_workflow() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");

@@ -132,6 +132,7 @@ impl PlanSession {
 pub struct RenamePipeline {
     pub config: Config,
     pub clipboard_text: Option<String>,
+    pub recursive: bool,
 }
 
 impl RenamePipeline {
@@ -139,6 +140,7 @@ impl RenamePipeline {
         Self {
             config,
             clipboard_text: None,
+            recursive: false,
         }
     }
 
@@ -147,8 +149,13 @@ impl RenamePipeline {
         self
     }
 
+    pub fn with_recursive(mut self, recursive: bool) -> Self {
+        self.recursive = recursive;
+        self
+    }
+
     pub fn prepare(&self, raw_paths: &[String]) -> Result<PlanSession, PipelineError> {
-        let paths = collection::collect_paths(raw_paths);
+        let paths = collection::collect_paths(raw_paths, self.recursive);
         if paths.is_empty() {
             return Err(PipelineError::NoFiles);
         }
@@ -476,6 +483,54 @@ mod tests {
     }
 
     #[test]
+    fn recursive_rename_preserves_parents_extensions_and_deduplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("subdir");
+        fs::create_dir(&sub).unwrap();
+        let reports = [dir.path().join("report1.docx"), sub.join("report1.docx")];
+        let unrelated = sub.join("other.docx");
+        for path in reports.iter().chain([&unrelated]) {
+            fs::write(path, "content").unwrap();
+        }
+        let config = Config {
+            open_editor: false,
+            subdirs_depth: 0,
+            auto_rules: vec![Rule {
+                scope: PathType::Stem,
+                find: "report".into(),
+                replace: "renamed".into(),
+                ..Rule::default()
+            }],
+            ..Config::default()
+        };
+        let pipeline = RenamePipeline::new(config).with_recursive(true);
+        let patterns: Vec<_> = [
+            dir.path().join("report*.docx"),
+            sub.join("*.docx"),
+            reports[1].clone(),
+        ]
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+        let outcome = pipeline.run_direct(&patterns, false, None).unwrap();
+        assert_eq!(outcome.result.success.len(), reports.len());
+        for path in reports {
+            let target = path.with_file_name("renamed1.docx");
+            assert!(
+                outcome
+                    .result
+                    .success
+                    .contains(&(path.clone(), target.clone()))
+            );
+            assert!(!path.exists());
+            assert_eq!(fs::read_to_string(target).unwrap(), "content");
+        }
+        assert_eq!(outcome.result.skipped, vec![unrelated.clone()]);
+        assert!(outcome.result.failed.is_empty());
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "content");
+    }
+
+    #[test]
     fn duplicate_target_aborts_before_changes() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.txt");
@@ -534,12 +589,12 @@ mod tests {
     #[test]
     fn stem_rule_preserves_dotted_directory_name() {
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("0ikj2.56234.345");
+        let source = dir.path().join("sample.part1.part2");
         fs::create_dir(&source).unwrap();
         let config = Config {
             auto_rules: vec![Rule {
                 scope: PathType::Stem,
-                find: "0ikj2".into(),
+                find: "sample".into(),
                 replace: "folder".into(),
                 ..Rule::default()
             }],
@@ -548,8 +603,11 @@ mod tests {
         let pipeline = RenamePipeline::new(config);
         let pairs = pipeline.plan(
             &[PathItem::new(&source)],
-            &[dir.path().join("0ikj2.56234.345")],
+            &[dir.path().join("sample.part1.part2")],
         );
-        assert_eq!(pairs[0].requested_new, dir.path().join("folder.56234.345"));
+        assert_eq!(
+            pairs[0].requested_new,
+            dir.path().join("folder.part1.part2")
+        );
     }
 }

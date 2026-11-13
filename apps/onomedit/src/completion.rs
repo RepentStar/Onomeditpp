@@ -18,7 +18,7 @@ _onomedit()
     else
         case "${COMP_WORDS[1]}" in
         rename)
-            comps="--dry-run --no-editor --multi-tab --reverse --timeout= --depth= --sort-by= --exclude= --path-type="
+            comps="--dry-run --no-editor --multi-tab --reverse -r --recursive --timeout= --depth= --sort-by= --exclude= --path-type="
             ;;
 
         restore)
@@ -91,6 +91,7 @@ _onomedit() {
                 '--no-editor[跳过编辑器]'
                 '--multi-tab[多标签编辑器]'
                 '--reverse[反转顺序]'
+                '(-r --recursive)'{-r,--recursive}'[递归匹配通配符]'
                 '--timeout=[编辑器等待超时]:秒'
                 '--depth=[目录搜索深度]:层级'
                 '--path-type=[路径类型]:类型:(full name stem ext)'
@@ -152,7 +153,7 @@ Register-ArgumentCompleter -Native -CommandName onomedit, onomedit.exe -ScriptBl
       switch ($cmd) {
           '' { $candidates = $cmds }
           'rename' {
-              $candidates = '--dry-run','--no-editor','--multi-tab','--reverse',
+              $candidates = '--dry-run','--no-editor','--multi-tab','--reverse','-r','--recursive',
                   '--timeout','--depth','--sort-by','--exclude','--path-type'
           }
           'restore' { $candidates = '--all','--partial' }
@@ -185,6 +186,8 @@ complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l dry-run -d '-
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l no-editor -d '--no-editor'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l multi-tab -d '--multi-tab'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l reverse -d '--reverse'
+complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l recursive -d '递归匹配通配符'
+complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -s r -d '递归匹配通配符'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l path-type -x -a 'full name stem ext' -d 'path-type'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l sort-by -x -a 'default name path mtime ctime size' -d 'sort-by'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l exclude -x -a 'f file d dir l link r readonly h hidden s system' -d 'exclude'
@@ -270,6 +273,8 @@ Register-ArgumentCompleter -CommandName onomedit, onomedit.exe -ScriptBlock {
         @{ name='--no-editor'; tip='跳过编辑器直接重命名' }
         @{ name='--multi-tab'; tip='多标签编辑器适配' }
         @{ name='--reverse'; tip='反转排序顺序' }
+        @{ name='-r'; tip='递归匹配通配符' }
+        @{ name='--recursive'; tip='递归匹配通配符' }
         @{ name='--timeout'; tip='编辑器等待超时（秒）' }
         @{ name='--depth'; tip='目录搜索深度（层级）' }
         @{ name='--sort-by'; tip='重命名顺序' }
@@ -335,6 +340,7 @@ pub fn generate(shell: &str) -> Option<String> {
         ("恢复重命名", "Restore renames"),
         ("版本信息", "Version information"),
         ("完整路径", "Full path"),
+        ("递归匹配通配符", "Match globs recursively"),
         ("完整文件名", "File name only"),
         ("不含扩展名", "Without extension"),
         ("仅扩展名", "Extension only"),
@@ -374,6 +380,16 @@ mod tests {
                 assert!(script.contains(command), "{shell} omitted {command}");
             }
             assert!(!script.as_bytes().windows(2).any(|bytes| bytes == b"\r\n"));
+            if shell == "fish" {
+                assert!(script.contains("-l recursive"));
+                assert!(script.contains("-s r "));
+            } else {
+                assert!(
+                    script.contains("--recursive"),
+                    "{shell} omitted --recursive"
+                );
+                assert!(script.contains("-r"), "{shell} omitted -r");
+            }
         }
         let bash = generate("bash").unwrap();
         for value in ["full", "name", "stem", "ext", "mtime", "readonly", "system"] {
