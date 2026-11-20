@@ -77,9 +77,13 @@ fn fixture() -> Fixture {
 fn run(args: &[impl AsRef<std::ffi::OsStr>], config_root: &Path, stdin: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_onomedit-cli"));
     command
-        .args(args)
         .env("APPDATA", config_root)
-        .env("XDG_CONFIG_HOME", config_root)
+        .env("XDG_CONFIG_HOME", config_root);
+    run_command(command.args(args), stdin)
+}
+
+fn run_command(command: &mut Command, stdin: Option<&str>) -> Output {
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -94,6 +98,106 @@ fn run(args: &[impl AsRef<std::ffi::OsStr>], config_root: &Path, stdin: Option<&
     }
     drop(child.stdin.take());
     child.wait_with_output().unwrap()
+}
+
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+#[test]
+fn absolute_cli_edit_move_and_restore_from_another_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("source");
+    let config_root = dir.path().join("config");
+    let config_dir = if cfg!(target_os = "macos") {
+        config_root.join("Library/Application Support/Onomedit")
+    } else {
+        config_root.join("Onomedit")
+    };
+    fs::create_dir(&origin).unwrap();
+    fs::create_dir_all(&config_dir).unwrap();
+    let source = origin.join("original.txt");
+    let target = dir.path().join("archive/first file.txt");
+    fs::write(&source, "payload").unwrap();
+
+    let fake_editor = dir
+        .path()
+        .join(format!("fake editor{}", std::env::consts::EXE_SUFFIX));
+    let build = Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&fake_editor)
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/onomedit-platform/tests/support/fake_editor.rs"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let config = serde_json::to_vec(&serde_json::json!({
+        "language": "en-US",
+        "editor": format!("\"{}\" set 1 \"{}\"", fake_editor.display(), target.display()),
+        "path_type": "full",
+    }))
+    .unwrap();
+    let config_path = config_dir.join("config.json");
+    fs::write(&config_path, &config).unwrap();
+    let cli = |cwd: &Path, args: &[&str], stdin| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_onomedit-cli"));
+        command
+            .current_dir(cwd)
+            .args(args)
+            .env("APPDATA", &config_root)
+            .env("XDG_CONFIG_HOME", &config_root)
+            .env("HOME", &config_root);
+        run_command(&mut command, stdin)
+    };
+    let invalid = cli(
+        &origin,
+        &["rename", "--absolute", "--path-type", "stem"],
+        None,
+    );
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr).contains("--absolute requires the full path type")
+    );
+    let preview = cli(
+        &origin,
+        &["rename", "--absolute", "--dry-run"],
+        Some("original.txt\n"),
+    );
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&preview.stdout);
+    assert!(stdout.contains(source.to_str().unwrap()), "{stdout}");
+    let target_text = target
+        .to_str()
+        .unwrap()
+        .replace('/', std::path::MAIN_SEPARATOR_STR);
+    assert!(stdout.contains(&target_text), "{stdout}");
+    assert!(!target.parent().unwrap().exists());
+    assert!(!config_dir.join("log").exists());
+
+    let applied = cli(&origin, &["rename", "--absolute", "original.txt"], None);
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "payload");
+    let restored = cli(dir.path(), &["restore"], None);
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), "payload");
+    assert!(!target.exists());
+    assert_eq!(fs::read(config_path).unwrap(), config);
 }
 
 fn fnv1a64(data: &[u8]) -> String {

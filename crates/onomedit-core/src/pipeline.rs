@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::absolute_path::{self, Source};
+use crate::absolute_rename::MovePlan;
 use crate::collection::{self, path_key};
 use crate::config::Config;
 use crate::diff::{diff_text, levenshtein};
 use crate::edit_file::{EditFile, EditFileError};
 use crate::journal::{RenameLogger, parse_line};
-use crate::path::PathItem;
+use crate::path::{PathItem, PathType};
 use crate::rules;
 use crate::safe_name::{sanitize_name, unique_path};
 use crate::template::{EnvContext, EnvVars};
@@ -89,6 +91,10 @@ pub enum PipelineError {
     NoFiles,
     #[error("应用排除规则后没有可处理的文件")]
     NoFilesAfterExclude,
+    #[error("--absolute 仅适用于 full 路径类型")]
+    AbsoluteRequiresFull,
+    #[error("{0}")]
+    Absolute(String),
     #[error(transparent)]
     EditFile(#[from] EditFileError),
     #[error(transparent)]
@@ -116,16 +122,22 @@ pub struct PipelineOutcome {
 
 pub struct PlanSession {
     pub items: Vec<PathItem>,
-    edit_file: EditFile,
+    edit_file: Option<EditFile>,
+    absolute_sources: Option<Vec<Source>>,
 }
 
 impl PlanSession {
     pub fn edit_path(&self) -> &Path {
-        self.edit_file.path()
+        self.edit_file
+            .as_ref()
+            .map_or_else(|| Path::new(""), EditFile::path)
     }
 
     pub fn signature(&self) -> Result<crate::edit_file::Signature, EditFileError> {
-        self.edit_file.signature()
+        self.edit_file
+            .as_ref()
+            .ok_or_else(|| io::Error::other("未创建编辑文件"))?
+            .signature()
     }
 }
 
@@ -133,6 +145,7 @@ pub struct RenamePipeline {
     pub config: Config,
     pub clipboard_text: Option<String>,
     pub recursive: bool,
+    absolute: bool,
 }
 
 impl RenamePipeline {
@@ -141,6 +154,7 @@ impl RenamePipeline {
             config,
             clipboard_text: None,
             recursive: false,
+            absolute: false,
         }
     }
 
@@ -154,35 +168,185 @@ impl RenamePipeline {
         self
     }
 
+    pub fn with_absolute(mut self, absolute: bool) -> Self {
+        self.absolute = absolute;
+        self
+    }
+
     pub fn prepare(&self, raw_paths: &[String]) -> Result<PlanSession, PipelineError> {
-        let paths = collection::collect_paths(raw_paths, self.recursive);
+        let cwd = if self.absolute {
+            if self.config.path_type != PathType::Full {
+                return Err(PipelineError::AbsoluteRequiresFull);
+            }
+            for (index, raw) in raw_paths.iter().enumerate() {
+                let path = Path::new(raw);
+                absolute_path::check_source_input(path).map_err(|error| {
+                    PipelineError::Absolute(absolute_path::row_error(
+                        index + 1,
+                        path,
+                        Path::new(""),
+                        error,
+                    ))
+                })?;
+            }
+            Some(std::env::current_dir()?)
+        } else {
+            None
+        };
+        let paths = if self.absolute {
+            collection::collect_absolute_paths(raw_paths, self.recursive)
+        } else {
+            collection::collect_paths(raw_paths, self.recursive)
+        };
         if paths.is_empty() {
             return Err(PipelineError::NoFiles);
         }
         let mut items: Vec<PathItem> = paths.into_iter().map(PathItem::new).collect();
         if self.config.expand_subdirs {
-            items = collection::expand_subdirs(items, self.config.subdirs_depth);
+            items = collection::expand(items, self.config.subdirs_depth, self.absolute);
         }
-        items = collection::apply_excludes(items, &self.config.exclude);
-        items = collection::dedupe_items(items);
+        items = collection::filter(items, &self.config.exclude, self.absolute);
+        let mut sources = HashMap::new();
+        if let Some(cwd) = cwd {
+            let mut seen = HashSet::new();
+            let mut absolute_items = Vec::new();
+            for (index, item) in items.into_iter().enumerate() {
+                let source = Source::read(item.full(), &cwd).map_err(|error| {
+                    PipelineError::Absolute(absolute_path::row_error(
+                        index + 1,
+                        item.full(),
+                        Path::new(""),
+                        error,
+                    ))
+                })?;
+                if seen.insert(source.key()) {
+                    absolute_items.push(PathItem::with_directory_hint(&source.path, item.is_dir()));
+                    sources.insert(source.path.clone(), source);
+                }
+            }
+            items = absolute_items;
+        } else {
+            items = collection::dedupe_items(items);
+        }
         items = collection::sort_items(items, &self.config.sort_by, self.config.sort_reverse);
         if items.is_empty() {
             return Err(PipelineError::NoFilesAfterExclude);
         }
         let temp_dir = (!self.config.temp_dir.is_empty()).then(|| Path::new(&self.config.temp_dir));
-        let edit_file = EditFile::create(&items, self.config.path_type, temp_dir)?;
-        Ok(PlanSession { items, edit_file })
+        let edit_file = if self.absolute && !self.config.open_editor {
+            None
+        } else {
+            Some(EditFile::create(&items, self.config.path_type, temp_dir)?)
+        };
+        let absolute_sources = self.absolute.then(|| {
+            items
+                .iter()
+                .map(|item| {
+                    sources
+                        .remove(item.full())
+                        .expect("snapshot for each selected entry")
+                })
+                .collect()
+        });
+        Ok(PlanSession {
+            items,
+            edit_file,
+            absolute_sources,
+        })
     }
 
     pub fn finish_plan(&self, session: &PlanSession) -> Result<Vec<RenamePair>, PipelineError> {
-        let lines = session.edit_file.read_lines(session.items.len())?;
+        let absolute = session.absolute_sources.is_some();
+        let path_type = if absolute {
+            PathType::Full
+        } else {
+            self.config.path_type
+        };
+        let lines = if let Some(edit_file) = &session.edit_file {
+            edit_file.read_lines(session.items.len())?
+        } else {
+            session
+                .items
+                .iter()
+                .map(|item| item.serialize(PathType::Full))
+                .collect()
+        };
         let edited: Vec<PathBuf> = session
             .items
             .iter()
             .zip(lines)
-            .map(|(item, line)| item.with_field(self.config.path_type, &line))
+            .map(|(item, line)| item.with_field(path_type, &line))
             .collect();
-        Ok(self.plan(&session.items, &edited))
+        if absolute {
+            self.plan_absolute(&session.items, &edited)
+        } else {
+            Ok(self.plan(&session.items, &edited))
+        }
+    }
+
+    fn plan_absolute(
+        &self,
+        items: &[PathItem],
+        edited: &[PathBuf],
+    ) -> Result<Vec<RenamePair>, PipelineError> {
+        let mut environment = EnvVars::default();
+        items
+            .iter()
+            .zip(edited)
+            .enumerate()
+            .map(|(index, (item, edited))| {
+                let mut full = edited.clone();
+                let operation = (|| {
+                    absolute_path::target(&full, false)?;
+                    if self.config.apply_rules && self.config.enable_auto_rules {
+                        for rule in &self.config.auto_rules {
+                            let current = PathItem::with_directory_hint(&full, item.is_dir());
+                            let value = rules::apply(&current.field(rule.scope), rule);
+                            if rule.scope != PathType::Full {
+                                absolute_path::check_name_segment(&value)?;
+                                if cfg!(windows) && value.contains(':') {
+                                    return Err(io::Error::other(
+                                        "路径包含 Windows 备用数据流分隔符",
+                                    ));
+                                }
+                            }
+                            full = current.with_field(rule.scope, &value);
+                            absolute_path::target(&full, false)?;
+                        }
+                    }
+                    let current = PathItem::with_directory_hint(&full, item.is_dir());
+                    let mut name = current.name();
+                    if self.config.apply_rules && self.config.enable_envvars {
+                        let context = EnvContext {
+                            file: item.serialize(PathType::Full),
+                            clip_text: self.clipboard_text.clone(),
+                        };
+                        name = environment.expand(&name, Some(&context));
+                        absolute_path::check_name_segment(&name)?;
+                        if matches!(name.as_str(), "" | "." | "..") {
+                            return Err(io::Error::other("请填写完整的绝对路径和名称"));
+                        }
+                    }
+                    if self.config.safety.sanitize {
+                        name = sanitize_name(&name, "_");
+                    } else if cfg!(windows) && name.contains(':') {
+                        return Err(io::Error::other("路径包含 Windows 备用数据流分隔符"));
+                    }
+                    full = current.directory().join(name);
+                    absolute_path::target(&full, true)
+                })();
+                operation
+                    .map(|new| RenamePair::new(item.full(), new))
+                    .map_err(|error| {
+                        PipelineError::Absolute(absolute_path::row_error(
+                            index + 1,
+                            item.full(),
+                            &full,
+                            error,
+                        ))
+                    })
+            })
+            .collect()
     }
 
     pub fn plan(&self, items: &[PathItem], edited: &[PathBuf]) -> Vec<RenamePair> {
@@ -229,8 +393,23 @@ impl RenamePipeline {
         logger: Option<RenameLogger>,
     ) -> Result<PipelineOutcome, PipelineError> {
         let session = self.prepare(raw_paths)?;
+        self.complete(session, dry_run, logger)
+    }
+
+    pub fn complete(
+        &self,
+        mut session: PlanSession,
+        dry_run: bool,
+        logger: Option<RenameLogger>,
+    ) -> Result<PipelineOutcome, PipelineError> {
         let temp_path = session.edit_path().to_owned();
         let pairs = self.finish_plan(&session)?;
+        let absolute_plan = session
+            .absolute_sources
+            .take()
+            .map(|sources| MovePlan::build(sources, &pairs, logger.as_ref()))
+            .transpose()?;
+        drop(session);
         if dry_run {
             let preview = (self.config.preview.diff || self.config.preview.distance)
                 .then(|| preview_rows(&pairs, &self.config));
@@ -242,10 +421,14 @@ impl RenamePipeline {
                 ..PipelineOutcome::default()
             });
         }
-        if let Some(log) = &logger {
-            log.begin_session();
-        }
-        let result = Renamer::new(logger).run(&pairs)?;
+        let result = if let Some(plan) = absolute_plan {
+            plan.execute(true)?
+        } else {
+            if let Some(log) = &logger {
+                log.begin_session();
+            }
+            Renamer::new(logger).run(&pairs)?
+        };
         Ok(PipelineOutcome {
             result,
             pairs,
@@ -469,6 +652,36 @@ pub fn restore(
         .rev()
         .map(|(old, new)| RenamePair::new(new, old))
         .collect();
+    if !all_history
+        && !reverse.is_empty()
+        && reverse.iter().all(|pair| {
+            absolute_path::target(&pair.old, true).is_ok()
+                && absolute_path::target(&pair.requested_new, true).is_ok()
+        })
+    {
+        let cwd = std::env::current_dir()?;
+        let mut seen = HashSet::new();
+        let mut sources = Vec::new();
+        for pair in &reverse {
+            let source = match Source::read(&pair.old, &cwd) {
+                Ok(source) => source,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => return Err(error.into()),
+            };
+            if !seen.insert(source.key()) {
+                break;
+            }
+            sources.push(source);
+        }
+        if sources.len() == reverse.len() {
+            let reverse: Vec<_> = sources
+                .iter()
+                .zip(&reverse)
+                .map(|(source, pair)| RenamePair::new(&source.path, &pair.requested_new))
+                .collect();
+            return MovePlan::build(sources, &reverse, Some(logger))?.execute(false);
+        }
+    }
     Ok(Renamer::new(Some(logger.clone())).run(&reverse)?)
 }
 

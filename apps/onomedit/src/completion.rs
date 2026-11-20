@@ -18,7 +18,7 @@ _onomedit()
     else
         case "${COMP_WORDS[1]}" in
         rename)
-            comps="--dry-run --no-editor --multi-tab --reverse -r --recursive --timeout= --depth= --sort-by= --exclude= --path-type="
+            comps="--dry-run --no-editor --absolute --multi-tab --reverse -r --recursive --timeout= --depth= --sort-by= --exclude= --path-type="
             ;;
 
         restore)
@@ -87,16 +87,17 @@ _onomedit() {
     case "$words[2]" in
         rename)
             _arguments -s \
-                '--dry-run[预览不执行]'
-                '--no-editor[跳过编辑器]'
-                '--multi-tab[多标签编辑器]'
-                '--reverse[反转顺序]'
-                '(-r --recursive)'{-r,--recursive}'[递归匹配通配符]'
-                '--timeout=[编辑器等待超时]:秒'
-                '--depth=[目录搜索深度]:层级'
-                '--path-type=[路径类型]:类型:(full name stem ext)'
-                '--sort-by=[重命名顺序]:键:(default name path mtime ctime size)'
-                '--exclude=[排除类型]:类型:(f file d dir l link r readonly h hidden s system)'
+                '--dry-run[预览不执行]' \
+                '--no-editor[跳过编辑器]' \
+                '--absolute[使用绝对路径编辑（仅适用于 full）]' \
+                '--multi-tab[多标签编辑器]' \
+                '--reverse[反转顺序]' \
+                '(-r --recursive)'{-r,--recursive}'[递归匹配通配符]' \
+                '--timeout=[编辑器等待超时]:秒' \
+                '--depth=[目录搜索深度]:层级' \
+                '--path-type=[路径类型]:类型:(full name stem ext)' \
+                '--sort-by=[重命名顺序]:键:(default name path mtime ctime size)' \
+                '--exclude=[排除类型]:类型:(f file d dir l link r readonly h hidden s system)' \
                 '*:文件:_files'
             ;;
         restore)
@@ -153,7 +154,7 @@ Register-ArgumentCompleter -Native -CommandName onomedit, onomedit.exe -ScriptBl
       switch ($cmd) {
           '' { $candidates = $cmds }
           'rename' {
-              $candidates = '--dry-run','--no-editor','--multi-tab','--reverse','-r','--recursive',
+              $candidates = '--dry-run','--no-editor','--absolute','--multi-tab','--reverse','-r','--recursive',
                   '--timeout','--depth','--sort-by','--exclude','--path-type'
           }
           'restore' { $candidates = '--all','--partial' }
@@ -184,6 +185,7 @@ complete -c onomedit -f -n '__fish_use_subcommand' -a 'version'
 
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l dry-run -d '--dry-run'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l no-editor -d '--no-editor'
+complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l absolute -d '使用绝对路径编辑（仅适用于 full）'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l multi-tab -d '--multi-tab'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l reverse -d '--reverse'
 complete -c onomedit -f -n '__fish_seen_subcommand_from rename' -l recursive -d '递归匹配通配符'
@@ -271,6 +273,7 @@ Register-ArgumentCompleter -CommandName onomedit, onomedit.exe -ScriptBlock {
     $renameOpts = @(
         @{ name='--dry-run'; tip='预览不执行' }
         @{ name='--no-editor'; tip='跳过编辑器直接重命名' }
+        @{ name='--absolute'; tip='使用绝对路径编辑（仅适用于 full）' }
         @{ name='--multi-tab'; tip='多标签编辑器适配' }
         @{ name='--reverse'; tip='反转排序顺序' }
         @{ name='-r'; tip='递归匹配通配符' }
@@ -341,6 +344,10 @@ pub fn generate(shell: &str) -> Option<String> {
         ("版本信息", "Version information"),
         ("完整路径", "Full path"),
         ("递归匹配通配符", "Match globs recursively"),
+        (
+            "使用绝对路径编辑（仅适用于 full）",
+            "Edit absolute paths (requires full)",
+        ),
         ("完整文件名", "File name only"),
         ("不含扩展名", "Without extension"),
         ("仅扩展名", "Extension only"),
@@ -382,6 +389,7 @@ mod tests {
             assert!(!script.as_bytes().windows(2).any(|bytes| bytes == b"\r\n"));
             if shell == "fish" {
                 assert!(script.contains("-l recursive"));
+                assert!(script.contains("-l absolute"));
                 assert!(script.contains("-s r "));
             } else {
                 assert!(
@@ -389,6 +397,7 @@ mod tests {
                     "{shell} omitted --recursive"
                 );
                 assert!(script.contains("-r"), "{shell} omitted -r");
+                assert!(script.contains("--absolute"), "{shell} omitted --absolute");
             }
         }
         let bash = generate("bash").unwrap();

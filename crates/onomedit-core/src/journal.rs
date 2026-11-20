@@ -1,6 +1,8 @@
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+
+use crate::native_move::{check_log_file, lock_log, log_options};
 
 pub const SEPARATOR: &str = "<-->";
 pub const ROTATE_BYTES: u64 = 1024 * 1024;
@@ -31,11 +33,7 @@ impl RenameLogger {
     }
 
     pub fn record(&self, old: &Path, new: &Path) {
-        let line = format!(
-            "{}{SEPARATOR}{}\n",
-            old.to_string_lossy(),
-            new.to_string_lossy()
-        );
+        let line = record_line(old, new);
         self.append_history(&line);
         append(&self.last_path, &line);
     }
@@ -53,6 +51,33 @@ impl RenameLogger {
 
     pub fn read_history(&self) -> Vec<(PathBuf, PathBuf)> {
         read_pairs(&self.history_path)
+    }
+
+    pub(crate) fn begin_checked_session(&self, reset: bool) -> io::Result<CheckedSession> {
+        let mut last = open_log(&self.last_path, false)?;
+        lock_log(&last)?;
+        let error = match fs::symlink_metadata(&self.error_path) {
+            Ok(_) => Some(open_log(&self.error_path, true)?),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let mut history = open_log(&self.history_path, true)?;
+        if history.metadata()?.len() > ROTATE_BYTES {
+            drop(history);
+            self.rotate();
+            history = open_log(&self.history_path, true)?;
+        }
+        if reset {
+            last.set_len(0)?;
+        } else {
+            last.seek(SeekFrom::End(0))?;
+        }
+        Ok(CheckedSession {
+            last,
+            history,
+            error,
+            error_path: self.error_path.clone(),
+        })
     }
 
     fn append_history(&self, line: &str) {
@@ -76,17 +101,67 @@ impl RenameLogger {
     }
 }
 
+pub(crate) struct CheckedSession {
+    last: File,
+    history: File,
+    error: Option<File>,
+    error_path: PathBuf,
+}
+
+impl CheckedSession {
+    pub fn record(&mut self, old: &Path, actual: &Path) -> io::Result<()> {
+        let line = record_line(old, actual);
+        write_line(&mut self.last, &line)?;
+        write_line(&mut self.history, &line)
+    }
+
+    pub fn record_error(&mut self, message: &str) -> io::Result<()> {
+        if self.error.is_none() {
+            self.error = Some(open_log(&self.error_path, true)?);
+        }
+        write_line(
+            self.error.as_mut().expect("error log is open"),
+            &format!("{message}\n"),
+        )
+    }
+}
+
+fn open_log(path: &Path, append: bool) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).create(true);
+    if append {
+        options.append(true);
+    } else {
+        options.write(true);
+    }
+    log_options(&mut options);
+    let file = options.open(path)?;
+    check_log_file(&file)?;
+    Ok(file)
+}
+
+fn record_line(old: &Path, new: &Path) -> String {
+    format!(
+        "{}{SEPARATOR}{}\n",
+        old.to_string_lossy(),
+        new.to_string_lossy()
+    )
+}
+
 fn append(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        if cfg!(windows) {
-            let text = text.replace('\n', "\r\n");
-            let _ = file.write_all(text.as_bytes());
-        } else {
-            let _ = file.write_all(text.as_bytes());
-        }
+        let _ = write_line(&mut file, text);
+    }
+}
+
+fn write_line(file: &mut File, text: &str) -> io::Result<()> {
+    if cfg!(windows) {
+        file.write_all(text.replace('\n', "\r\n").as_bytes())
+    } else {
+        file.write_all(text.as_bytes())
     }
 }
 

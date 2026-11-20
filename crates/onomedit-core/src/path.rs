@@ -74,6 +74,10 @@ impl PathItem {
         &self.full
     }
 
+    pub(crate) fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
     pub fn directory(&self) -> &Path {
         self.full.parent().unwrap_or_else(|| Path::new(""))
     }

@@ -15,19 +15,34 @@ pub fn read_stream_paths(reader: impl BufRead) -> io::Result<Vec<String>> {
     reader
         .lines()
         .map(|line| line.map(|value| value.trim().to_owned()))
-        .filter(|line| line.as_ref().is_ok_and(|value| !value.is_empty()))
+        .filter(|line| !matches!(line, Ok(value) if value.is_empty()))
         .collect()
 }
 
 /// With `recursive`, insert `**` before the final glob segment unless already present.
 /// Explicit file and directory paths are left unchanged.
 pub fn collect_paths(raw_paths: &[String], recursive: bool) -> Vec<PathBuf> {
+    collect(raw_paths, recursive, false)
+}
+
+pub(crate) fn collect_absolute_paths(raw_paths: &[String], recursive: bool) -> Vec<PathBuf> {
+    collect(raw_paths, recursive, true)
+}
+
+fn collect(raw_paths: &[String], recursive: bool, absolute: bool) -> Vec<PathBuf> {
     let options = MatchOptions {
         case_sensitive: !cfg!(windows),
         require_literal_separator: false,
         require_literal_leading_dot: true,
     };
     let mut output = Vec::new();
+    let exists = |path: &Path| {
+        if absolute {
+            fs::symlink_metadata(entry_path(path)).is_ok()
+        } else {
+            path.exists()
+        }
+    };
     for raw in raw_paths {
         if has_magic(raw) {
             let pattern = if recursive
@@ -43,11 +58,11 @@ pub fn collect_paths(raw_paths: &[String], recursive: bool) -> Vec<PathBuf> {
                 raw.clone()
             };
             if let Ok(matches) = glob_with(&pattern, options) {
-                output.extend(matches.filter_map(Result::ok).filter(|path| path.exists()));
+                output.extend(matches.filter_map(Result::ok).filter(|path| exists(path)));
             }
         } else {
             let path = PathBuf::from(raw);
-            if path.exists() {
+            if exists(&path) {
                 output.push(path);
             }
         }
@@ -60,13 +75,17 @@ fn has_magic(path: &str) -> bool {
 }
 
 pub fn expand_subdirs(items: Vec<PathItem>, depth: i32) -> Vec<PathItem> {
+    expand(items, depth, false)
+}
+
+pub(crate) fn expand(items: Vec<PathItem>, depth: i32, absolute: bool) -> Vec<PathItem> {
     if depth <= 0 {
         return items;
     }
     let mut output = Vec::new();
     for item in items {
-        if item.full().is_dir() {
-            expand_directory(item.full(), 1, depth, &mut output);
+        if item.full().is_dir() && !(absolute && is_link(item.full())) {
+            expand_directory(item.full(), 1, depth, &mut output, absolute);
         } else {
             output.push(item);
         }
@@ -74,7 +93,13 @@ pub fn expand_subdirs(items: Vec<PathItem>, depth: i32) -> Vec<PathItem> {
     output
 }
 
-fn expand_directory(directory: &Path, level: i32, depth: i32, output: &mut Vec<PathItem>) {
+fn expand_directory(
+    directory: &Path,
+    level: i32,
+    depth: i32,
+    output: &mut Vec<PathItem>,
+    absolute: bool,
+) {
     if level > depth {
         return;
     }
@@ -85,7 +110,13 @@ fn expand_directory(directory: &Path, level: i32, depth: i32, output: &mut Vec<P
     let mut files = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() && !path.is_symlink() {
+        if path.is_dir()
+            && !(if absolute {
+                is_link(&path)
+            } else {
+                path.is_symlink()
+            })
+        {
             directories.push(path);
         } else {
             files.push(path);
@@ -94,7 +125,7 @@ fn expand_directory(directory: &Path, level: i32, depth: i32, output: &mut Vec<P
     output.extend(directories.iter().cloned().map(PathItem::new));
     output.extend(files.into_iter().map(PathItem::new));
     for child in directories {
-        expand_directory(&child, level + 1, depth, output);
+        expand_directory(&child, level + 1, depth, output, absolute);
     }
 }
 
@@ -131,18 +162,48 @@ pub fn path_key(path: &Path) -> String {
 }
 
 pub fn apply_excludes(items: Vec<PathItem>, exclude: &ExcludeOptions) -> Vec<PathItem> {
+    filter(items, exclude, false)
+}
+
+pub(crate) fn filter(
+    items: Vec<PathItem>,
+    exclude: &ExcludeOptions,
+    absolute: bool,
+) -> Vec<PathItem> {
     items
         .into_iter()
         .filter(|item| {
             let path = item.full();
             !(exclude.files && path.is_file()
                 || exclude.dirs && path.is_dir()
-                || exclude.symlinks && path.is_symlink()
+                || exclude.symlinks
+                    && (if absolute {
+                        is_link(path)
+                    } else {
+                        path.is_symlink()
+                    })
                 || exclude.readonly && is_readonly(path)
-                || exclude.hidden && is_hidden(path)
+                || exclude.hidden && is_hidden(path, absolute)
                 || exclude.system && is_system(path))
         })
         .collect()
+}
+
+fn entry_path(path: &Path) -> &Path {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let trimmed = Path::new(text.trim_end_matches(std::path::is_separator));
+    if trimmed.has_root() || !path.has_root() {
+        trimmed
+    } else {
+        path
+    }
+}
+
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(entry_path(path))
+        .is_ok_and(|metadata| crate::native_move::is_redirect(&metadata))
 }
 
 pub fn sort_items(mut items: Vec<PathItem>, sort_by: &str, reverse: bool) -> Vec<PathItem> {
@@ -290,13 +351,29 @@ fn is_readonly(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|metadata| metadata.permissions().readonly())
 }
 
-fn is_hidden(path: &Path) -> bool {
+fn is_hidden(path: &Path, absolute: bool) -> bool {
     #[cfg(windows)]
-    return attributes(path) & 0x2 != 0;
+    {
+        let _ = absolute;
+        attributes(path) & 0x2 != 0
+    }
     #[cfg(not(windows))]
-    return path
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().starts_with('.'));
+    {
+        let resolved = if absolute
+            && entry_path(path)
+                .to_str()
+                .is_some_and(|text| matches!(text.rsplit('/').next(), Some("." | "..")))
+        {
+            fs::canonicalize(path).ok()
+        } else {
+            None
+        };
+        resolved
+            .as_deref()
+            .unwrap_or(path)
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+    }
 }
 
 fn is_system(path: &Path) -> bool {
@@ -309,6 +386,15 @@ fn is_system(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_paths_reject_invalid_utf8() {
+        let stream = &b"first.txt\n\xff.txt\nsecond.txt\n"[..];
+        assert_eq!(
+            read_stream_paths(stream).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
 
     #[test]
     fn recursive_globs_match_reports_beyond_directory_expansion_depth() {

@@ -119,6 +119,8 @@ struct RenameArgs {
     no_editor: bool,
     #[arg(long, value_parser = ["full", "name", "stem", "ext"], help = "覆盖路径类型")]
     path_type: Option<String>,
+    #[arg(long, help = "本次使用绝对路径编辑（仅适用于 full）")]
+    absolute: bool,
     #[arg(long, help = "多标签编辑器：直接轮询等保存")]
     multi_tab: bool,
     #[arg(long, help = "编辑器等待超时（秒）")]
@@ -226,7 +228,7 @@ const COMPLETION_USAGE: &str = "usage: onomedit completion {bash,zsh,pwsh,fish,p
 const CONFIG_USAGE: &str = "usage: onomedit config <操作> ...";
 const CONFIG_SET_USAGE: &str = "usage: onomedit config set key value";
 const CONFIG_SET_EDITOR_USAGE: &str = "usage: onomedit config set-editor command [command ...]";
-const RENAME_USAGE: &str = "usage: onomedit rename [--dry-run] [--no-editor]\n                       [--path-type {full,name,stem,ext}] [--multi-tab]\n                       [--timeout TIMEOUT] [--sort-by KEY] [--reverse]\n                       [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]\n                       [paths ...]";
+const RENAME_USAGE: &str = "usage: onomedit rename [--dry-run] [--no-editor]\n                       [--path-type {full,name,stem,ext}] [--absolute] [--multi-tab]\n                       [--timeout TIMEOUT] [--sort-by KEY] [--reverse]\n                       [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]\n                       [paths ...]";
 
 fn compatible_parse_error(arguments: &[OsString]) -> Option<String> {
     let args: Vec<String> = arguments
@@ -548,7 +550,7 @@ options:
         }
         Some("rename") => {
             r#"usage: onomedit rename [--dry-run] [--no-editor]
-                       [--path-type {full,name,stem,ext}] [--multi-tab]
+                       [--path-type {full,name,stem,ext}] [--absolute] [--multi-tab]
                        [--timeout TIMEOUT] [--sort-by KEY] [--reverse]
                        [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]
                        [paths ...]
@@ -564,6 +566,7 @@ options:
   --no-editor           跳过编辑器（直接应用规则）
   --path-type {full,name,stem,ext}
                         覆盖路径类型
+  --absolute            本次使用绝对路径编辑（仅适用于 full）
   --multi-tab           多标签编辑器：直接轮询等保存
   --timeout TIMEOUT     编辑器等待超时（秒）
   --sort-by KEY         临时重命名顺序：default 原顺序、name 名称、path 路径、mtime 修改时间、ctime
@@ -579,6 +582,7 @@ options:
 示例:
   onomedit rename a.txt b.txt
   onomedit rename *.jpg --dry-run
+  onomedit rename --path-type full --absolute --dry-run *.jpg
   onomedit rename "照片/*.jpg" -r --dry-run  递归匹配子目录
   onomedit rename --no-editor --path-type name  仅应用规则不拉起编辑器
   onomedit rename *.txt --exclude h d --dry-run  临时排除隐藏文件与目录
@@ -675,7 +679,7 @@ Examples:
         }
         Some("rename") => {
             r#"usage: onomedit rename [--dry-run] [--no-editor]
-                       [--path-type {full,name,stem,ext}] [--multi-tab]
+                       [--path-type {full,name,stem,ext}] [--absolute] [--multi-tab]
                        [--timeout TIMEOUT] [--sort-by KEY] [--reverse]
                        [-r | --recursive] [--depth N] [--exclude TYPE [TYPE ...]]
                        [paths ...]
@@ -687,6 +691,7 @@ options:
   --dry-run      Preview without applying
   --no-editor    Apply rules without opening the editor
   --path-type    Override the path type
+  --absolute     Edit absolute paths for this run (requires full)
   --multi-tab    Poll a multi-tab editor for saves
   --timeout      Editor wait timeout in seconds
   --sort-by      Temporary rename order
@@ -841,6 +846,13 @@ fn command_rename(args: RenameArgs) -> i32 {
     if let Some(path_type) = args.path_type {
         settings.path_type = path_type.parse::<PathType>().expect("validated path type");
     }
+    if args.absolute && settings.path_type != PathType::Full {
+        localized_error(&match current() {
+            Language::ZhCn => "--absolute 仅适用于 full 路径类型",
+            Language::EnUs => "--absolute requires the full path type",
+        });
+        return 2;
+    }
     if args.multi_tab {
         settings.multi_tab = true;
     }
@@ -893,7 +905,8 @@ fn command_rename(args: RenameArgs) -> i32 {
     let clipboard_text = clipboard::get_text();
     let pipeline = RenamePipeline::new(settings.clone())
         .with_clipboard_text(clipboard_text)
-        .with_recursive(args.recursive);
+        .with_recursive(args.recursive)
+        .with_absolute(args.absolute);
     let outcome = (|| {
         let session = pipeline
             .prepare(&paths)
@@ -926,30 +939,13 @@ fn command_rename(args: RenameArgs) -> i32 {
             )
             .map_err(|error| error.to_string())?;
         }
-        let pairs = pipeline
-            .finish_plan(&session)
-            .map_err(|error| error.to_string())?;
-        if args.dry_run {
-            let preview = (settings.preview.diff || settings.preview.distance)
-                .then(|| onomedit_core::pipeline::preview_rows(&pairs, &settings));
-            Ok(PipelineOutcome {
-                pairs,
-                preview,
-                dry_run: true,
-                ..PipelineOutcome::default()
-            })
-        } else {
-            let logger = RenameLogger::new(config::log_dir());
-            logger.begin_session();
-            let result = onomedit_core::pipeline::Renamer::new(Some(logger))
-                .run(&pairs)
-                .map_err(|error| error.to_string())?;
-            Ok(PipelineOutcome {
-                pairs,
-                result,
-                ..PipelineOutcome::default()
-            })
-        }
+        pipeline
+            .complete(
+                session,
+                args.dry_run,
+                Some(RenameLogger::new(config::log_dir())),
+            )
+            .map_err(|error| error.to_string())
     })();
     let outcome = match outcome {
         Ok(outcome) => outcome,

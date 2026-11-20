@@ -169,10 +169,10 @@
     {
       "name": "help_rename",
       "args": ["help", "rename"],
-      "stdout_len": 2221,
-      "stdout_fnv1a64": "37866db184a7674e",
-      "stdout_windows_len": 2257,
-      "stdout_windows_fnv1a64": "2ba0a8043f207800"
+      "stdout_len": 2374,
+      "stdout_fnv1a64": "49d6f1755c506a8c",
+      "stdout_windows_len": 2412,
+      "stdout_windows_fnv1a64": "eca039dac3b426bc"
     },
     {
       "name": "help_restore",
@@ -203,32 +203,32 @@
     {
       "name": "completion_bash",
       "args": ["completion", "bash"],
-      "stdout_len": 1584,
-      "stdout_fnv1a64": "a0ee1d019cb0a497"
+      "stdout_len": 1595,
+      "stdout_fnv1a64": "691a3aa1f88fb46c"
     },
     {
       "name": "completion_zsh",
       "args": ["completion", "zsh"],
-      "stdout_len": 2040,
-      "stdout_fnv1a64": "1e05827965543baf"
+      "stdout_len": 2140,
+      "stdout_fnv1a64": "b15a6cc893523772"
     },
     {
       "name": "completion_pwsh",
       "args": ["completion", "pwsh"],
-      "stdout_len": 2378,
-      "stdout_fnv1a64": "4cbf18f77d647367"
+      "stdout_len": 2391,
+      "stdout_fnv1a64": "aa3cf24b2c9e1270"
     },
     {
       "name": "completion_fish",
       "args": ["completion", "fish"],
-      "stdout_len": 2340,
-      "stdout_fnv1a64": "c2de9f97cad7d397"
+      "stdout_len": 2469,
+      "stdout_fnv1a64": "d7b8b096f689c095"
     },
     {
       "name": "completion_psc",
       "args": ["completion", "psc"],
-      "stdout_len": 5320,
-      "stdout_fnv1a64": "5fd15d59b287fb5c"
+      "stdout_len": 5406,
+      "stdout_fnv1a64": "74b2038edf92a778"
     }
   ],
   "error_snapshots": [
@@ -317,46 +317,46 @@
       "name": "rename_path_type_invalid",
       "args": ["rename", "a", "--path-type", "bad"],
       "exit_code": 2,
-      "stderr_len": 421,
-      "stderr_fnv1a64": "b5cf72aae32c9e44",
-      "stderr_windows_len": 427,
-      "stderr_windows_fnv1a64": "1b016a7fec85eb7a"
+      "stderr_len": 434,
+      "stderr_fnv1a64": "97e866c0716c1ee5",
+      "stderr_windows_len": 440,
+      "stderr_windows_fnv1a64": "3eb2769bf5edde1f"
     },
     {
       "name": "rename_sort_invalid",
       "args": ["rename", "a", "--sort-by", "bad"],
       "exit_code": 2,
-      "stderr_len": 441,
-      "stderr_fnv1a64": "48a55a089a7b77f8",
-      "stderr_windows_len": 447,
-      "stderr_windows_fnv1a64": "2bf132c8875a53da"
+      "stderr_len": 454,
+      "stderr_fnv1a64": "f737942c2363a5fd",
+      "stderr_windows_len": 460,
+      "stderr_windows_fnv1a64": "1c84aec73d266e23"
     },
     {
       "name": "rename_depth_invalid",
       "args": ["rename", "a", "--depth", "abc"],
       "exit_code": 2,
-      "stderr_len": 376,
-      "stderr_fnv1a64": "aaf98c109cf4efdf",
-      "stderr_windows_len": 382,
-      "stderr_windows_fnv1a64": "1bf674ec959316d5"
+      "stderr_len": 389,
+      "stderr_fnv1a64": "fc7dc76c9b46c9bc",
+      "stderr_windows_len": 395,
+      "stderr_windows_fnv1a64": "a1cb0a31194aedd6"
     },
     {
       "name": "rename_timeout_invalid",
       "args": ["rename", "a", "--timeout", "abc"],
       "exit_code": 2,
-      "stderr_len": 380,
-      "stderr_fnv1a64": "da5f689cd2447982",
-      "stderr_windows_len": 386,
-      "stderr_windows_fnv1a64": "cd594bb8c736981e"
+      "stderr_len": 393,
+      "stderr_fnv1a64": "cb4a28ba9b370331",
+      "stderr_windows_len": 399,
+      "stderr_windows_fnv1a64": "230d8e8aa3b589fd"
     },
     {
       "name": "rename_exclude_invalid",
       "args": ["rename", "a", "--exclude", "bad"],
       "exit_code": 2,
-      "stderr_len": 473,
-      "stderr_fnv1a64": "321846cc3b3e82bf",
-      "stderr_windows_len": 479,
-      "stderr_windows_fnv1a64": "edf0f202f6d63293"
+      "stderr_len": 486,
+      "stderr_fnv1a64": "58c70ab43a81e7ae",
+      "stderr_windows_len": 492,
+      "stderr_windows_fnv1a64": "dd66aedd105183b6"
     },
     {
       "name": "history_extra",
@@ -425,46 +425,46 @@
       "name": "rename_path_type_missing",
       "args": ["rename", "a", "--path-type"],
       "exit_code": 2,
-      "stderr_len": 377,
-      "stderr_fnv1a64": "f92d486bdd426f20",
-      "stderr_windows_len": 383,
-      "stderr_windows_fnv1a64": "9405a5e58079f412"
+      "stderr_len": 390,
+      "stderr_fnv1a64": "c27d1603244703ad",
+      "stderr_windows_len": 396,
+      "stderr_windows_fnv1a64": "d19524f6dadc031f"
     },
     {
       "name": "rename_timeout_missing",
       "args": ["rename", "a", "--timeout"],
       "exit_code": 2,
-      "stderr_len": 375,
-      "stderr_fnv1a64": "869fb29251c9d729",
-      "stderr_windows_len": 381,
-      "stderr_windows_fnv1a64": "c3656f2f5f970725"
+      "stderr_len": 388,
+      "stderr_fnv1a64": "98c2cb7603be227c",
+      "stderr_windows_len": 394,
+      "stderr_windows_fnv1a64": "d1ee019857667910"
     },
     {
       "name": "rename_sort_missing",
       "args": ["rename", "a", "--sort-by"],
       "exit_code": 2,
-      "stderr_len": 375,
-      "stderr_fnv1a64": "b3a02b6c65bfb548",
-      "stderr_windows_len": 381,
-      "stderr_windows_fnv1a64": "7dbcda67c1b01dca"
+      "stderr_len": 388,
+      "stderr_fnv1a64": "52913fc18f6bc99d",
+      "stderr_windows_len": 394,
+      "stderr_windows_fnv1a64": "f92293f33e3a906f"
     },
     {
       "name": "rename_depth_missing",
       "args": ["rename", "a", "--depth"],
       "exit_code": 2,
-      "stderr_len": 373,
-      "stderr_fnv1a64": "3fea0ded8756f363",
-      "stderr_windows_len": 379,
-      "stderr_windows_fnv1a64": "483f7bc765362987"
+      "stderr_len": 386,
+      "stderr_fnv1a64": "e10fc20a7bc0358a",
+      "stderr_windows_len": 392,
+      "stderr_windows_fnv1a64": "9ec2dd06c4d4e432"
     },
     {
       "name": "rename_exclude_missing",
       "args": ["rename", "a", "--exclude"],
       "exit_code": 2,
-      "stderr_len": 384,
-      "stderr_fnv1a64": "edc730655f4e5ff2",
-      "stderr_windows_len": 390,
-      "stderr_windows_fnv1a64": "80e29b89eefd7f1a"
+      "stderr_len": 397,
+      "stderr_fnv1a64": "948e847da8e260b5",
+      "stderr_windows_len": 403,
+      "stderr_windows_fnv1a64": "d9fb2d4142006009"
     },
     {
       "name": "restore_extra",

@@ -1,8 +1,11 @@
+mod absolute_path;
+mod absolute_rename;
 pub mod collection;
 pub mod config;
 pub mod diff;
 pub mod edit_file;
 pub mod journal;
+mod native_move;
 pub mod path;
 pub mod pipeline;
 pub mod rules;

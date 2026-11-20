@@ -33,6 +33,16 @@ pub fn unique_path(target: &Path) -> PathBuf {
     if !target.exists() {
         return target.to_owned();
     }
+    for n in 1_u64.. {
+        let candidate = numbered_path(target, n);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+pub(crate) fn numbered_path(target: &Path, number: u64) -> PathBuf {
     let parent = target.parent().unwrap_or_else(|| Path::new(""));
     let stem = target
         .file_stem()
@@ -42,13 +52,19 @@ pub fn unique_path(target: &Path) -> PathBuf {
         .extension()
         .map(|v| format!(".{}", v.to_string_lossy()))
         .unwrap_or_default();
-    for n in 1_u64.. {
-        let candidate = parent.join(format!("{stem} ({n}){suffix}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!()
+    parent.join(format!("{stem} ({number}){suffix}"))
+}
+
+#[cfg(windows)]
+pub(crate) fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    RESERVED
+        .iter()
+        .any(|value| stem.eq_ignore_ascii_case(value))
+        || matches!(
+            stem.to_ascii_uppercase().as_str(),
+            "CONIN$" | "CONOUT$" | "COM¹" | "COM²" | "COM³" | "LPT¹" | "LPT²" | "LPT³"
+        )
 }
 
 #[cfg(test)]
